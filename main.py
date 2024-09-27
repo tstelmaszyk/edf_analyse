@@ -13,6 +13,7 @@ class SecureConnectionToApi():
 
     def __init__(self):
         url_oauth = "https://digital.iservices.rte-france.com/token/oauth/"
+        #False key -> to be replace by the real one
         header_oauth_connexion = {
             "Content-Type": "application/x-www-form-urlencoded",
             "Authorization": "Basic NjdlNWNkOTctYjg0OC00MjgzLWE5MDQtNjMzMjE2YmVjOTM0OmZlNTQ1YjM4LTM4MWYtNGMwNC04NzcxLWY5NDE1ODY2Nzk1Nw=="
