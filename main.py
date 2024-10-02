@@ -25,6 +25,8 @@ class SecureConnectionToApi():
 class EdfTempoApi(SecureConnectionToApi):
     """
     https://data.rte-france.com/catalog/-/api/doc/user-guide/Tempo+Like+Supply+Contract/1.1
+    sometimes the answer from is XML, sometimes the answer is JSON -> bug ?
+    in the XML the color is in french and in json the color is in english ?
     """
 
     def __init__(self):
@@ -33,6 +35,12 @@ class EdfTempoApi(SecureConnectionToApi):
         self.message_header = {
             "Authorization": f"Bearer {self.access_token}"
         }
+        self.color_translation = {
+            'ROUGE': 'RED',
+            'BLANC': 'WHITE',
+            'BLEU': 'BLUE',
+        }
+
 
     def api_request_between_two_dates(self, start_date, end_date, fallback_status="false"):
         """
@@ -80,7 +88,7 @@ class EdfTempoApi(SecureConnectionToApi):
         date_color_dict = {}
         for color in data_dict['Tempos']['Tempo']:
             date = str(color['DateApplication'])
-            date_color_dict[datetime.strptime(date[0:10], "%Y-%m-%d").date()] = color['Couleur']
+            date_color_dict[datetime.strptime(date[0:10], "%Y-%m-%d").date()] = self.color_translation[color['Couleur']]
         return date_color_dict
 
     def dict_from_two_dates(self, start_date, end_date):
@@ -96,26 +104,49 @@ class EdfTempoApi(SecureConnectionToApi):
 
 class EdfVariables():
     def __init__(self):
+        """
+        https://particulier.edf.fr/content/dam/2-Actifs/Documents/Offres/Grille_prix_Tarif_Bleu.pdf
+        """
         self.HP_START_TIME = time(6, 0, 0)
         self.HP_END_TIME = time(22, 0, 0)
 
+        self.OPT_BASE_PRICE_KkWh = 0.2516
+        self.OPT_BASE_ABNM_MONTH_3 = 9.63
+
+        self.OPT_HOUR_HP_PRICE_KkWh = 0.27
+        self.OPT_HOUR_HC_PRICE_KkWh = 0.2068
+        self.OPT_HOUR_ABNM_MONTH_3 = 13.01
+
+        self.OPT_TEMPO_BLUE_HC_PRICE_KkWh = 0.1296
+        self.OPT_TEMPO_BLUE_HP_PRICE_KkWh = 0.1609
+        self.OPT_TEMPO_WHITE_HC_PRICE_KkWh = 0.1486
+        self.OPT_TEMPO_WHITE_HP_PRICE_KkWh = 0.1894
+        self.OPT_TEMPO_RED_HC_PRICE_KkWh = 0.1568
+        self.OPT_TEMPO_RED_HP_PRICE_KkWh = 0.7562
+        self.OPT_TEMPO_ABNM_MONTH_3 = 12.96
+
         # Connection to the EDF API to get the price
         tempo = EdfTempoApi()
-        dict_2021 = tempo.dict_from_two_dates(start_date="2021-01-01", end_date="2021-12-31")
-        dict_2022 = tempo.dict_from_two_dates(start_date="2022-01-01", end_date="2022-12-31")
-        dict_2023 = tempo.dict_from_two_dates(start_date="2023-01-01", end_date="2023-12-31")
+        dict_2021 = tempo.dict_from_two_dates(start_date="2021-01-01", end_date="2021-05-31")
+        dict_2021_2 = tempo.dict_from_two_dates(start_date="2021-06-01", end_date="2021-12-31")
+        dict_2022 = tempo.dict_from_two_dates(start_date="2022-01-01", end_date="2022-05-31")
+        dict_2022_2 = tempo.dict_from_two_dates(start_date="2022-06-01", end_date="2022-12-31")
+        dict_2023 = tempo.dict_from_two_dates(start_date="2023-01-01", end_date="2023-05-31")
+        dict_2023_2 = tempo.dict_from_two_dates(start_date="2023-06-01", end_date="2023-12-31")
         dict_2024 = tempo.dict_from_two_dates(start_date="2024-01-01", end_date="2024-09-26")
-        self.dict_calendar_colors = {**dict_2021, **dict_2022, **dict_2023, **dict_2024}
+        self.dict_calendar_colors = {**dict_2021,**dict_2021_2, **dict_2022, **dict_2022_2, **dict_2023, **dict_2023_2, **dict_2024}
 
 
 class EdfClientFileGenerator():
-    def __init__(self,
-                 csv_file_downloaded='/Users/tsvk/Documents/Projets/edf_tempo/mes-puissances-atteintes-30min-004037583323-75010.csv'):
+    def __init__(self, csv_file_downloaded):
         self.df = pd.read_csv(csv_file_downloaded, sep=';', encoding='latin-1')
         self.edf_datas = EdfVariables()
 
         self.client_df = self.correct_bug_in_file(self.df)
         self.add_data_to_df()
+        self.add_column_with_tempo_price()
+        self.add_column_with_base_price()
+        self.add_column_with_kWh()
 
     def correct_bug_in_file(self, df):
         """Correction of a bug -> some values are duplicated"""
@@ -129,8 +160,11 @@ class EdfClientFileGenerator():
         return df_corrected
 
     def add_data_to_df (self):
+        """
+        To do ? Separer dans des fonctions pour claireté (mais moins optimisé ...)
+        """
         date_read = None
-        rows_to_keep = []
+        rows_to_keep = [] #Because some unused rows will be deleted
         new_column_with_date_str = []
         new_column_with_date_datetime = []
         new_column_with_hour_price = []
@@ -149,7 +183,7 @@ class EdfClientFileGenerator():
                 try:
                     new_column_with_color.append(self.edf_datas.dict_calendar_colors[date_time.date()])
                 except KeyError as e:
-                    new_column_with_color.append("NA")
+                    new_column_with_color.append("NF")
 
                 if self.edf_datas.HP_START_TIME <= date_time.time() <= self.edf_datas.HP_END_TIME:
                     new_column_with_hour_price.append("HP")
@@ -162,7 +196,41 @@ class EdfClientFileGenerator():
         self.client_df['tarif_horraire'] = new_column_with_hour_price
         self.client_df['code_couleur'] = new_column_with_color
 
+    def add_column_with_tempo_price(self):
+        new_column_with_tempo_price = []
+        for row in self.client_df.itertuples(index=False):
+            code = row[6] + "-" + row[5]
+            match code:
+                case "BLUE-HC":
+                    new_column_with_tempo_price.append(self.edf_datas.OPT_TEMPO_BLUE_HC_PRICE_KkWh)
+                case "BLUE-HP":
+                    new_column_with_tempo_price.append(self.edf_datas.OPT_TEMPO_BLUE_HP_PRICE_KkWh)
+                case "WHITE-HC":
+                    new_column_with_tempo_price.append(self.edf_datas.OPT_TEMPO_WHITE_HC_PRICE_KkWh)
+                case "WHITE-HP":
+                    new_column_with_tempo_price.append(self.edf_datas.OPT_TEMPO_WHITE_HP_PRICE_KkWh)
+                case "RED-HC":
+                    new_column_with_tempo_price.append(self.edf_datas.OPT_TEMPO_RED_HC_PRICE_KkWh)
+                case "RED-HP":
+                    new_column_with_tempo_price.append(self.edf_datas.OPT_TEMPO_RED_HP_PRICE_KkWh)
+                case _:
+                    new_column_with_tempo_price.append("NA")
+        self.client_df['tempo_price'] = new_column_with_tempo_price
+
+    def add_column_with_base_price(self):
+        new_column_with_base_price = []
+        for row in self.client_df.itertuples(index=False):
+            new_column_with_base_price.append(self.edf_datas.OPT_BASE_PRICE_KkWh)
+        self.client_df['base_price'] = new_column_with_base_price
+
+    def add_column_with_kWh(self):
+        new_column_with_kWh = []
+        for row in self.client_df.itertuples(index=False):
+            power = (row[1]/1000)/2
+            new_column_with_kWh.append(power)
+        self.client_df['power_kWh'] = new_column_with_kWh
 
 if __name__ == "__main__":
-    fichier = EdfClientFileGenerator()
+    fichier = EdfClientFileGenerator('/Users/tsvk/Documents/Projets/edf_tempo/mes-puissances-atteintes-30min-004037583323-75010.csv')
     print(fichier.client_df)
+    fichier.client_df.to_csv('/Users/tsvk/Documents/Projets/edf_tempo/out.csv', index=False, sep=";", decimal=",")
